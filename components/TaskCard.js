@@ -2,32 +2,44 @@
 
 import { getStatusLabel, getNextStatus } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
-import { useState } from "react";
 
 export default function TaskCard({ task, canEdit, isAdmin, onStatusChange, onDelete }) {
-  const [updating, setUpdating] = useState(false);
   const supabase = createClient();
 
-  async function handleStatusToggle() {
+  function handleStatusToggle() {
     if (!canEdit) return;
-    setUpdating(true);
     const newStatus = getNextStatus(task.status);
 
-    const { error } = await supabase
+    // Optimistic: update UI immediately
+    if (onStatusChange) onStatusChange(task.id, newStatus);
+
+    // Fire DB update in background (no await)
+    supabase
       .from("tasks")
       .update({ status: newStatus, updated_at: new Date().toISOString() })
-      .eq("id", task.id);
-
-    if (!error && onStatusChange) {
-      onStatusChange(task.id, newStatus);
-    }
-    setUpdating(false);
+      .eq("id", task.id)
+      .then(({ error }) => {
+        if (error) {
+          // Revert on failure
+          if (onStatusChange) onStatusChange(task.id, task.status);
+        }
+      });
   }
 
-  async function handleDelete() {
+  function handleDelete() {
     if (!confirm("Delete this task?")) return;
-    const { error } = await supabase.from("tasks").delete().eq("id", task.id);
-    if (!error && onDelete) onDelete(task.id);
+
+    // Optimistic: remove from UI immediately
+    if (onDelete) onDelete(task.id);
+
+    // Fire DB delete in background
+    supabase
+      .from("tasks")
+      .delete()
+      .eq("id", task.id)
+      .then(({ error }) => {
+        if (error) console.error("Delete failed:", error);
+      });
   }
 
   return (
@@ -50,11 +62,11 @@ export default function TaskCard({ task, canEdit, isAdmin, onStatusChange, onDel
         <button
           className={`status-badge ${task.status}`}
           onClick={handleStatusToggle}
-          disabled={!canEdit || updating}
+          disabled={!canEdit}
           title={canEdit ? "Click to change status" : "Only assigned member or admin can change"}
         >
           <span className={`status-dot ${task.status}`} />
-          {updating ? "..." : getStatusLabel(task.status)}
+          {getStatusLabel(task.status)}
         </button>
       </div>
 
